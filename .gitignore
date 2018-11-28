@@ -1,3 +1,5 @@
+/libvpx.js
+/libvpx.wasm
 *.S
 *.a
 *.asm.s
