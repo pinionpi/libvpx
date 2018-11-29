@@ -1,5 +1,3 @@
-// See simple_encoder.c for details.
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,6 +5,7 @@
 #include "emscripten.h"
 #include "../vp8cx.h"
 #include "../vpx_encoder.h"
+#include "../../vpx_ports/mem_ops.h"
 
 #define VP8_FOURCC 0x30385056
 #define VP9_FOURCC 0x30395056
@@ -65,6 +64,8 @@ void die(const char* message) {
   exit(EXIT_FAILURE);
 }
 
+// img encoder
+
 int vpx_img_plane_width(const vpx_image_t *img, int plane) {
   if (plane > 0 && img->x_chroma_shift > 0)
     return (img->d_w + 1) >> img->x_chroma_shift;
@@ -99,26 +100,89 @@ int vpx_img_read(vpx_image_t *img, FILE *file) {
   return 1;
 }
 
-int vpx_video_writer_write_frame(VpxVideoWriter *writer, const uint8_t *buffer,
-                                 size_t size, int64_t pts) {
-  writer = 0;
-  buffer = 0;
-  size = 0;
-  pts = 0;
-  return 0;
+// ivf encoder
+
+void ivf_write_file_header(FILE *outfile, const struct vpx_codec_enc_cfg *cfg,
+                           unsigned int fourcc, int frame_cnt) {
+  char header[32];
+
+  header[0] = 'D';
+  header[1] = 'K';
+  header[2] = 'I';
+  header[3] = 'F';
+  mem_put_le16(header + 4, 0);                     // version
+  mem_put_le16(header + 6, 32);                    // header size
+  mem_put_le32(header + 8, fourcc);                // fourcc
+  mem_put_le16(header + 12, cfg->g_w);             // width
+  mem_put_le16(header + 14, cfg->g_h);             // height
+  mem_put_le32(header + 16, cfg->g_timebase.den);  // rate
+  mem_put_le32(header + 20, cfg->g_timebase.num);  // scale
+  mem_put_le32(header + 24, frame_cnt);            // length
+  mem_put_le32(header + 28, 0);                    // unused
+
+  fwrite(header, 1, 32, outfile);
 }
+
+void ivf_write_frame_header(FILE *outfile, int64_t pts, size_t frame_size) {
+  char header[12];
+
+  mem_put_le32(header, (int)frame_size);
+  mem_put_le32(header + 4, (int)(pts & 0xFFFFFFFF));
+  mem_put_le32(header + 8, (int)(pts >> 32));
+  fwrite(header, 1, 12, outfile);
+}
+
+void ivf_write_frame_size(FILE *outfile, size_t frame_size) {
+  char header[4];
+
+  mem_put_le32(header, (int)frame_size);
+  fwrite(header, 1, 4, outfile);
+}
+
+void write_header(FILE *file, const VpxVideoInfo *info,
+                         int frame_count) {
+  struct vpx_codec_enc_cfg cfg;
+  cfg.g_w = info->frame_width;
+  cfg.g_h = info->frame_height;
+  cfg.g_timebase.num = info->time_base.numerator;
+  cfg.g_timebase.den = info->time_base.denominator;
+
+  ivf_write_file_header(file, &cfg, info->codec_fourcc, frame_count);
+}
+
+// video writer: img -> vp8 -> ivf
 
 VpxVideoWriter *vpx_video_writer_open(const char *filename,
                                       VpxContainer container,
                                       const VpxVideoInfo *info) {
-  filename = 0;
-  container = 0;
-  info = 0;
-  return 0;
+  if (container == kContainerIVF) {
+    VpxVideoWriter *writer = NULL;
+    FILE *const file = fopen(filename, "wb");
+    if (!file) return NULL;
+
+    writer = malloc(sizeof(*writer));
+    if (!writer) return NULL;
+
+    writer->frame_count = 0;
+    writer->info = *info;
+    writer->file = file;
+
+    write_header(writer->file, info, 0);
+
+    return writer;
+  }
+
+  return NULL;
 }
 
-void vpx_video_writer_close(VpxVideoWriter *writer) {
-  writer = 0;
+int vpx_video_writer_write_frame(VpxVideoWriter *writer, const uint8_t *buffer,
+                                 size_t size, int64_t pts) {
+  ivf_write_frame_header(writer->file, pts, size);
+  if (fwrite(buffer, 1, size, writer->file) != size) return 0;
+
+  ++writer->frame_count;
+
+  return 1;
 }
 
 int encode_frame(vpx_codec_ctx_t *codec, vpx_image_t *img,
@@ -148,10 +212,11 @@ int encode_frame(vpx_codec_ctx_t *codec, vpx_image_t *img,
   return got_pkts;
 }
 
+// JS API
+
 EMSCRIPTEN_KEEPALIVE
 void vpx_js_encoder_init(int frame_width, int frame_height) {
-  encoder = &vpx_encoders[0];
-  if (!encoder) die("Unsupported codec.");
+  encoder = &vpx_encoders[0]; // VP8
   printf("Using %s\n", vpx_codec_iface_name(encoder->codec_interface()));
 
   info.codec_fourcc = encoder->fourcc;
@@ -208,14 +273,4 @@ void vpx_js_encoder_send_frame() {
 
   fclose(infile);
   printf("Processed %d frames.\n", frame_count);
-}
-
-EMSCRIPTEN_KEEPALIVE
-void vpx_js_encoder_uninit() {
-  vpx_img_free(&img);
-
-  if (vpx_codec_destroy(&codec))
-    die("Failed to destroy codec.");
-
-  vpx_video_writer_close(writer);
 }
