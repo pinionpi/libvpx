@@ -27,6 +27,7 @@ API_DOC_SRCS-yes += vpx_encoder.h
 API_DOC_SRCS-yes += vpx_frame_buffer.h
 API_DOC_SRCS-yes += vpx_image.h
 
+API_SRCS-yes += src/wasm.c
 API_SRCS-yes += src/vpx_decoder.c
 API_SRCS-yes += vpx_decoder.h
 API_SRCS-yes += src/vpx_encoder.c
