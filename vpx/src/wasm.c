@@ -29,6 +29,7 @@
 #include "../vpx_decoder.h"
 #include "../../vpx_ports/mem_ops.h"
 #include "libyuv/convert.h"
+#include "libyuv/convert_from.h"
 
 #define VP8_FOURCC 0x30385056
 #define VP9_FOURCC 0x30395056
@@ -554,16 +555,35 @@ void vpx_js_encoder_run() {
 // yuv = malloc(width * height * 3/2);
 // rgba = malloc(width * height * 4);
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_rgba_to_yuv420(uint8_t* yuv, uint8_t* rgba,
-  int width, int height) {
+void vpx_js_rgba_to_yuv420(
+  uint8_t* yuv, uint8_t* rgba, int width, int height) {
   // Taken from WebRTC's ConvertRGB24ToI420:
   uint8_t* yplane = yuv;
   uint8_t* uplane = yplane + width * height;
   uint8_t* vplane = uplane + width * height / 4;
 
-  RGBAToI420(rgba, width * 4,
+  RGBAToI420(
+    rgba, width * 4,
     yplane, width,
     uplane, width / 2,
     vplane, width / 2,
+    width, height);
+}
+
+// yuv = malloc(width * height * 3/2);
+// rgba = malloc(width * height * 4);
+EMSCRIPTEN_KEEPALIVE
+void vpx_js_yuv420_to_rgba(
+  uint8_t* rgba, uint32_t* yuv, int width, int height) {
+  // Taken from WebRTC's ConvertRGB24ToI420:
+  uint8_t* yplane = yuv;
+  uint8_t* uplane = yplane + width * height;
+  uint8_t* vplane = uplane + width * height / 4;
+
+  I420ToRGBA(
+    yplane, width,
+    uplane, width / 2,
+    vplane, width / 2,
+    rgba, width * 4,
     width, height);
 }

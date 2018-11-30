@@ -10,6 +10,7 @@ LIBYUV_SRCS-yes += include/libyuv/basic_types.h  \
                 	 include/libyuv/scale_row.h  \
                 	 source/cpu_id.cc \
 									 source/convert.cc \
+									 source/convert_from.cc \
                 	 source/planar_functions.cc \
                 	 source/row_any.cc \
                 	 source/row_common.cc \
