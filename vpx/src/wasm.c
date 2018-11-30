@@ -20,11 +20,9 @@
 #include "../vp8cx.h"
 #include "../vpx_encoder.h"
 #include "../../vpx_ports/mem_ops.h"
+#include "libyuv/convert.h"
 
-EMSCRIPTEN_KEEPALIVE
 static const uint32_t VP8_FOURCC = 0x30385056;
-
-EMSCRIPTEN_KEEPALIVE
 static const uint32_t VP9_FOURCC = 0x30395056;
 
 typedef enum { kContainerIVF } VpxContainer;
@@ -58,8 +56,8 @@ static const VpxInterface vpx_encoders[] = {
   { "vp9", VP9_FOURCC, &vpx_codec_vp9_cx },
 };
 
-static const char* outfile_arg = "/vpx-ivf";
-static const char* infile_arg = "/vpx-yuv";
+static const char* ivf_file_path = "/vpx-ivf";
+static const char* yuv_file_path = "/vpx-yuv";
 
 static FILE *infile = NULL;
 static vpx_codec_ctx_t codec;
@@ -217,9 +215,7 @@ int vpx_video_writer_write_frame(VpxVideoWriter *writer, const uint8_t *buffer,
                                  size_t size, int64_t pts) {
   ivf_write_frame_header(writer->file, pts, size);
   if (fwrite(buffer, 1, size, writer->file) != size) return 0;
-
   ++writer->frame_count;
-
   return 1;
 }
 
@@ -236,9 +232,9 @@ int encode_frame(vpx_codec_ctx_t *codec, vpx_image_t *img,
   int got_pkts = 0;
   vpx_codec_iter_t iter = NULL;
   const vpx_codec_cx_pkt_t *pkt = NULL;
-  const vpx_codec_err_t res =
-      vpx_codec_encode(codec, img, frame_index, 1, flags, VPX_DL_GOOD_QUALITY);
-  if (res != VPX_CODEC_OK) die("Failed to encode frame");
+
+  if (vpx_codec_encode(codec, img, frame_index, 1, flags, VPX_DL_GOOD_QUALITY))
+    die("Failed to encode frame");
 
   while ((pkt = vpx_codec_get_cx_data(codec, &iter)) != NULL) {
     got_pkts = 1;
@@ -277,7 +273,7 @@ void vpx_js_encoder_init(uint32_t fourcc, int frame_width, int frame_height) {
   info.time_base.numerator = 1;
   info.time_base.denominator = fps;
 
-  writer = vpx_video_writer_open(outfile_arg, kContainerIVF, &info);
+  writer = vpx_video_writer_open(ivf_file_path, kContainerIVF, &info);
   if (!writer) die("Failed to open %s for writing.");
 
   // init img buffer
@@ -313,7 +309,7 @@ void vpx_js_encoder_exit() {
 
 EMSCRIPTEN_KEEPALIVE
 void vpx_js_encoder_process() {
-  if (!(infile = fopen(infile_arg, "rb")))
+  if (!(infile = fopen(yuv_file_path, "rb")))
     die("Failed to open file for reading.");
 
   while (vpx_img_read(&img, infile)) {
@@ -330,4 +326,21 @@ void vpx_js_encoder_process() {
 
   fclose(infile);
   printf("Processed %d frames.\n", frame_count);
+}
+
+// yuv = malloc(width * height * 3/2);
+// rgba = malloc(width * height * 4);
+EMSCRIPTEN_KEEPALIVE
+void vpx_js_rgba_to_yuv420(uint8_t* yuv, uint8_t* rgba,
+  int width, int height) {
+  // Taken from WebRTC's ConvertRGB24ToI420:
+  uint8_t* yplane = yuv;
+  uint8_t* uplane = yplane + width * height;
+  uint8_t* vplane = uplane + width * height / 4;
+
+  RGBAToI420(rgba, width * 4,
+    yplane, width,
+    uplane, width / 2,
+    vplane, width / 2,
+    width, height);
 }
