@@ -509,21 +509,22 @@ void vpx_js_encoder_close() {
 
 EMSCRIPTEN_KEEPALIVE
 void vpx_js_decoder_run() {
-  vpx_codec_iter_t iter = NULL;
-  vpx_image_t *img = NULL;
-  size_t frame_size = 0;
-  const uint8_t *frame = NULL;
-
   while (vpx_video_reader_read_frame(reader)) {
+    vpx_codec_iter_t iter = NULL;
+    vpx_image_t *img = NULL;
+    size_t frame_size = 0;
+    const uint8_t *frame = NULL;
+
     frame = vpx_video_reader_get_frame(reader, &frame_size);
+    printf("Got an IVF frame: %d bytes\n", (int)frame_size);
 
     if (vpx_codec_decode(&codec, frame, (unsigned int)frame_size, NULL, 0))
       die("Failed to decode frame.");
 
     while ((img = vpx_codec_get_frame(&codec, &iter)) != NULL) {
+      printf("Decoded a YUV frame: %dx%d.\n", img->w, img->h);
       vpx_img_write(img, outfile);
       ++frame_count;
-      printf("Decoded a frame.");
     }
   }
 
@@ -555,14 +556,14 @@ void vpx_js_encoder_run() {
 // yuv = malloc(width * height * 3/2);
 // rgba = malloc(width * height * 4);
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_rgba_to_yuv420(
+int vpx_js_rgba_to_yuv420(
   uint8_t* yuv, uint8_t* rgba, int width, int height) {
   // Taken from WebRTC's ConvertRGB24ToI420:
   uint8_t* yplane = yuv;
   uint8_t* uplane = yplane + width * height;
   uint8_t* vplane = uplane + width * height / 4;
 
-  RGBAToI420(
+  return RGBAToI420(
     rgba, width * 4,
     yplane, width,
     uplane, width / 2,
@@ -573,14 +574,14 @@ void vpx_js_rgba_to_yuv420(
 // yuv = malloc(width * height * 3/2);
 // rgba = malloc(width * height * 4);
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_yuv420_to_rgba(
-  uint8_t* rgba, uint32_t* yuv, int width, int height) {
+int vpx_js_yuv420_to_rgba(
+  uint8_t* rgba, uint8_t* yuv, int width, int height) {
   // Taken from WebRTC's ConvertRGB24ToI420:
   uint8_t* yplane = yuv;
   uint8_t* uplane = yplane + width * height;
   uint8_t* vplane = uplane + width * height / 4;
 
-  I420ToRGBA(
+  return I420ToRGBA(
     yplane, width,
     uplane, width / 2,
     vplane, width / 2,
