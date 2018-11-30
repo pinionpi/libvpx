@@ -15,6 +15,6 @@ emconfigure ./configure --target=generic-gnu \
 
 emmake make
 
-emcc -v libvpx.a -o libvpx.js
+emcc -v -s ALLOW_MEMORY_GROWTH=1 libvpx.a -o libvpx.js
 
 ls -l libvpx.*
