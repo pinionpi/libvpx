@@ -324,8 +324,9 @@ void vpx_js_encoder_process() {
   // Flush encoder.
   while (encode_frame(&codec, NULL, -1, 0, writer)) {}
 
-  fclose(infile);
   printf("Processed %d frames.\n", frame_count);
+  fflush(writer->file); // make IVF packets readable from /vpx-ivf
+  fclose(infile);
 }
 
 // yuv = malloc(width * height * 3/2);
