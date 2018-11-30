@@ -1,3 +1,17 @@
+// See simple_encoder.c for more details.
+//
+// The encoder lifetime:
+//  - vpx_js_encoder_init()
+//  - write frame pixels to /vpx-yuv file
+//  - vpx_js_encoder_process();
+//  - vpx_js_encoder_exit()
+//  - read IVF packets from /vpx-ivf file
+//
+// All the files are in-memory memfs Emscripten files.
+//
+// TODO: use libyuv to convert RGBA to YUV12.
+//
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,8 +21,11 @@
 #include "../vpx_encoder.h"
 #include "../../vpx_ports/mem_ops.h"
 
-#define VP8_FOURCC 0x30385056
-#define VP9_FOURCC 0x30395056
+EMSCRIPTEN_KEEPALIVE
+static const uint32_t VP8_FOURCC = 0x30385056;
+
+EMSCRIPTEN_KEEPALIVE
+static const uint32_t VP9_FOURCC = 0x30395056;
 
 typedef enum { kContainerIVF } VpxContainer;
 
@@ -41,8 +58,8 @@ static const VpxInterface vpx_encoders[] = {
   { "vp9", VP9_FOURCC, &vpx_codec_vp9_cx },
 };
 
-static const char* outfile_arg = "vpx-output";
-static const char* infile_arg = "vpx-input";
+static const char* outfile_arg = "/vpx-ivf";
+static const char* infile_arg = "/vpx-yuv";
 
 static FILE *infile = NULL;
 static vpx_codec_ctx_t codec;
@@ -62,6 +79,27 @@ static int frames_encoded = 0;
 void die(const char* message) {
   printf("die: %s\n", message);
   exit(EXIT_FAILURE);
+}
+
+void check_frame_size(int w, int h) {
+  if (w <= 0 || h <= 0 || w % 2 || h % 2)
+    die("Bad frame size.");
+}
+
+int get_vpx_encoder_count(void) {
+  return sizeof(vpx_encoders) / sizeof(vpx_encoders[0]);
+}
+
+const VpxInterface* get_vpx_encoder_by_fourcc(uint32_t fourcc) {
+  const int n = get_vpx_encoder_count();
+
+  for (int i = 0; i < n; i++) {
+    const VpxInterface* e = &vpx_encoders[i];
+    if (e->fourcc == fourcc)
+      return e;
+  }
+
+  return NULL;
 }
 
 // img encoder
@@ -185,6 +223,14 @@ int vpx_video_writer_write_frame(VpxVideoWriter *writer, const uint8_t *buffer,
   return 1;
 }
 
+void vpx_video_writer_close(VpxVideoWriter *writer) {
+  // Rewriting frame header with real frame count
+  rewind(writer->file);
+  write_header(writer->file, &writer->info, writer->frame_count);
+  fclose(writer->file);
+  free(writer);
+}
+
 int encode_frame(vpx_codec_ctx_t *codec, vpx_image_t *img,
                  int frame_index, int flags , VpxVideoWriter *writer) {
   int got_pkts = 0;
@@ -215,9 +261,15 @@ int encode_frame(vpx_codec_ctx_t *codec, vpx_image_t *img,
 // JS API
 
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_encoder_init(int frame_width, int frame_height) {
-  encoder = &vpx_encoders[0]; // VP8
+void vpx_js_encoder_init(uint32_t fourcc, int frame_width, int frame_height) {
+  if (keyframe_interval < 0) die("Invalid keyframe interval value.");
+  check_frame_size(frame_width, frame_height);
+
+  encoder = get_vpx_encoder_by_fourcc(fourcc);
+  if (!encoder) die("Invalid codec fourcc");
   printf("Using %s\n", vpx_codec_iface_name(encoder->codec_interface()));
+
+  // init ivf writer
 
   info.codec_fourcc = encoder->fourcc;
   info.frame_width = frame_width;
@@ -225,17 +277,16 @@ void vpx_js_encoder_init(int frame_width, int frame_height) {
   info.time_base.numerator = 1;
   info.time_base.denominator = fps;
 
-  if (info.frame_width <= 0 || info.frame_height <= 0 ||
-      (info.frame_width % 2) != 0 || (info.frame_height % 2) != 0) {
-    die("Invalid frame size");
-  }
+  writer = vpx_video_writer_open(outfile_arg, kContainerIVF, &info);
+  if (!writer) die("Failed to open %s for writing.");
+
+  // init img buffer
 
   if (!vpx_img_alloc(&img, VPX_IMG_FMT_I420, frame_width, frame_height, 1)) {
     die("Failed to allocate image.");
   }
 
-  if (keyframe_interval < 0)
-    die("Invalid keyframe interval value.");
+  // init vpx encoder
 
   res = vpx_codec_enc_config_default(encoder->codec_interface(), &cfg, 0);
   if (res) die("Failed to get default codec config.");
@@ -247,15 +298,21 @@ void vpx_js_encoder_init(int frame_width, int frame_height) {
   cfg.rc_target_bitrate = bitrate;
   cfg.g_error_resilient = (vpx_codec_er_flags_t)0;
 
-  writer = vpx_video_writer_open(outfile_arg, kContainerIVF, &info);
-  if (!writer) die("Failed to open %s for writing.");
-
   if (vpx_codec_enc_init(&codec, encoder->codec_interface(), &cfg, 0))
     die("Failed to initialize encoder");
 }
 
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_encoder_send_frame() {
+void vpx_js_encoder_exit() {
+  vpx_img_free(&img);
+  vpx_video_writer_close(writer);
+
+  if (vpx_codec_destroy(&codec))
+    die("Failed to destroy codec.");
+}
+
+EMSCRIPTEN_KEEPALIVE
+void vpx_js_encoder_process() {
   if (!(infile = fopen(infile_arg, "rb")))
     die("Failed to open file for reading.");
 
