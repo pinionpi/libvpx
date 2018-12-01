@@ -207,13 +207,19 @@ int ivf_read_frame(FILE *infile, uint8_t **buffer, size_t *bytes_read,
   char raw_header[IVF_FRAME_HDR_SZ] = { 0 };
   size_t frame_size = 0;
 
+  printf("Reading IVF frame from file pos %d\n", (int)ftell(infile));
+
   if (fread(raw_header, IVF_FRAME_HDR_SZ, 1, infile) != 1) {
-    if (!feof(infile)) printf("Failed to read frame size");
+    if (!feof(infile))
+      printf("Failed to read frame size\n");
+    else
+      printf("Reached end of IVF file.\n");
   } else {
     frame_size = mem_get_le32(raw_header);
+    printf("IVF frame size: %d\n", (int)frame_size);
 
     if (frame_size > 256 * 1024 * 1024) {
-      printf("Read invalid frame size (%u)", (unsigned int)frame_size);
+      printf("Read invalid frame size (%u)\n", (unsigned int)frame_size);
       frame_size = 0;
     }
 
@@ -224,15 +230,17 @@ int ivf_read_frame(FILE *infile, uint8_t **buffer, size_t *bytes_read,
         *buffer = new_buffer;
         *buffer_size = 2 * frame_size;
       } else {
-        printf("Failed to allocate compressed data buffer");
+        printf("Failed to allocate compressed data buffer\n");
         frame_size = 0;
       }
     }
   }
 
   if (!feof(infile)) {
+    printf("Reading the frame data.\n");
+
     if (fread(*buffer, 1, frame_size, infile) != frame_size) {
-      printf("Failed to read full frame");
+      printf("Failed to read full frame\n");
       return 1;
     }
 
@@ -240,6 +248,7 @@ int ivf_read_frame(FILE *infile, uint8_t **buffer, size_t *bytes_read,
     return 0;
   }
 
+  printf("Failed to read the IVF frame.\n");
   return 1;
 }
 
@@ -509,6 +518,12 @@ void vpx_js_encoder_close() {
 
 EMSCRIPTEN_KEEPALIVE
 void vpx_js_decoder_run() {
+  int pos = ftell(reader->file);
+  printf("Reopening the IVF file at pos %d\n", pos);
+  fclose(reader->file);
+  reader->file = fopen(ivf_file_path, "rb");
+  fseek(reader->file, pos, SEEK_SET);
+
   while (vpx_video_reader_read_frame(reader)) {
     vpx_codec_iter_t iter = NULL;
     vpx_image_t *img = NULL;
@@ -529,6 +544,7 @@ void vpx_js_decoder_run() {
   }
 
   fflush(outfile); // make YUV frames readable from /vpx-yuv
+  fflush(stdout);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -563,7 +579,7 @@ int vpx_js_rgba_to_yuv420(
   uint8_t* uplane = yplane + width * height;
   uint8_t* vplane = uplane + width * height / 4;
 
-  return RGBAToI420(
+  return ABGRToI420(
     rgba, width * 4,
     yplane, width,
     uplane, width / 2,
@@ -581,7 +597,7 @@ int vpx_js_yuv420_to_rgba(
   uint8_t* uplane = yplane + width * height;
   uint8_t* vplane = uplane + width * height / 4;
 
-  return I420ToRGBA(
+  return I420ToABGR(
     yplane, width,
     uplane, width / 2,
     vplane, width / 2,
