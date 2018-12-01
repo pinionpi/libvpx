@@ -9,8 +9,9 @@ emconfigure ./configure --target=generic-gnu \
 
 emmake make
 
+# Replace -O2 with --profiling --profiling-funcs -g4 and use Chrome's profiler.
 emcc -v \
-  --profiling --profiling-funcs -g4 \
+  -O2 \
   -s ALLOW_MEMORY_GROWTH=1 \
   libvpx.a -o libvpx.js
 
