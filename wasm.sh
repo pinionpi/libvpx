@@ -8,5 +8,10 @@ emconfigure ./configure --target=generic-gnu \
   --disable-examples
 
 emmake make
-emcc -v -s ALLOW_MEMORY_GROWTH=1 libvpx.a -o libvpx.js
-ls -l libvpx.*
+
+emcc -v \
+  --profiling --profiling-funcs -g4 \
+  -s ALLOW_MEMORY_GROWTH=1 \
+  libvpx.a -o libvpx.js
+
+ls -l --block-size K libvpx.*

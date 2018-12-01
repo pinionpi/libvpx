@@ -404,7 +404,7 @@ int encode_frame(vpx_codec_ctx_t *codec, vpx_image_t *img,
   vpx_codec_iter_t iter = NULL;
   const vpx_codec_cx_pkt_t *pkt = NULL;
 
-  if (vpx_codec_encode(codec, img, frame_index, 1, flags, VPX_DL_GOOD_QUALITY))
+  if (vpx_codec_encode(codec, img, frame_index, 1, flags, VPX_DL_REALTIME))
     die("Failed to encode frame");
 
   while ((pkt = vpx_codec_get_cx_data(codec, &iter)) != NULL) {

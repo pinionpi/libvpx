@@ -1,5 +1,7 @@
 /libvpx.js
 /libvpx.wasm
+/libvpx.wast
+/libvpx.wasm.map
 *.S
 *.a
 *.asm.s
