@@ -207,16 +207,15 @@ int ivf_read_frame(FILE *infile, uint8_t **buffer, size_t *bytes_read,
   char raw_header[IVF_FRAME_HDR_SZ] = { 0 };
   size_t frame_size = 0;
 
-  printf("Reading IVF frame from file pos %d\n", (int)ftell(infile));
-
+  // printf("Reading IVF frame from file pos %d\n", (int)ftell(infile));
   if (fread(raw_header, IVF_FRAME_HDR_SZ, 1, infile) != 1) {
     if (!feof(infile))
       printf("Failed to read frame size\n");
-    else
-      printf("Reached end of IVF file.\n");
+    /* else
+      printf("Reached end of IVF file.\n"); */
   } else {
     frame_size = mem_get_le32(raw_header);
-    printf("IVF frame size: %d\n", (int)frame_size);
+    // printf("IVF frame size: %d\n", (int)frame_size);
 
     if (frame_size > 256 * 1024 * 1024) {
       printf("Read invalid frame size (%u)\n", (unsigned int)frame_size);
@@ -237,8 +236,7 @@ int ivf_read_frame(FILE *infile, uint8_t **buffer, size_t *bytes_read,
   }
 
   if (!feof(infile)) {
-    printf("Reading the frame data.\n");
-
+    // printf("Reading the frame data.\n");
     if (fread(*buffer, 1, frame_size, infile) != frame_size) {
       printf("Failed to read full frame\n");
       return 1;
@@ -248,7 +246,7 @@ int ivf_read_frame(FILE *infile, uint8_t **buffer, size_t *bytes_read,
     return 0;
   }
 
-  printf("Failed to read the IVF frame.\n");
+  // printf("Failed to read the IVF frame.\n");
   return 1;
 }
 
@@ -432,9 +430,6 @@ void vpx_js_decoder_open() {
   reader = vpx_video_reader_open(ivf_file_path);
   if (!reader) die("Failed to open IVF file for reading.");
 
-  outfile = fopen(yuv_file_path, "wb");
-  if (!outfile) die("Failed to open YUV file for writing.");
-
   info = vpx_video_reader_get_info(reader);
   decoder = get_vpx_decoder_by_fourcc(info->codec_fourcc);
   if (!decoder) die("Unknown input codec.");
@@ -518,6 +513,9 @@ void vpx_js_encoder_close() {
 
 EMSCRIPTEN_KEEPALIVE
 void vpx_js_decoder_run() {
+  FILE* outfile = fopen(yuv_file_path, "wb");
+  if (!outfile) die("Failed to open YUV file for writing.");
+
   int pos = ftell(reader->file);
   printf("Reopening the IVF file at pos %d\n", pos);
   fclose(reader->file);
@@ -543,7 +541,7 @@ void vpx_js_decoder_run() {
     }
   }
 
-  fflush(outfile); // make YUV frames readable from /vpx-yuv
+  fclose(outfile);
   fflush(stdout);
 }
 
