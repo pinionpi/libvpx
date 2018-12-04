@@ -5,7 +5,8 @@ emconfigure ./configure --target=generic-gnu \
   --disable-runtime-cpu-detect \
   --disable-unit-tests \
   --disable-install-docs \
-  --disable-examples
+  --disable-examples \
+  --enable-realtime-only
 
 emmake make
 
