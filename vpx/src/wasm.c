@@ -423,7 +423,8 @@ void vpx_js_decoder_open() {
   if (vpx_codec_dec_init(&ctx_dec, decoder->codec_interface(), NULL, 0))
     die(("Failed to initialize decoder."));
 
-  printf("Decoding from %s to %s\n", DEC_IVF_FILE, DEC_YUV_FILE);
+  printf("Decoding %dx%d from %s to %s\n",
+    info->frame_width, info->frame_height, DEC_IVF_FILE, DEC_YUV_FILE);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -462,7 +463,8 @@ void vpx_js_encoder_open(uint32_t fourcc, int width, int height, int fps) {
   int res = vpx_codec_enc_init(&ctx_enc, encoder->codec_interface(), &cfg, 0);
   if (res) die(("vpx_codec_enc_init failed: %d\n", (int)res))
 
-  printf("Encoding from %s to %s\n", ENC_YUV_FILE, ENC_IVF_FILE);
+  printf("Encoding %dx%d from %s to %s\n",
+    width, height, ENC_YUV_FILE, ENC_IVF_FILE);
 }
 
 EMSCRIPTEN_KEEPALIVE
