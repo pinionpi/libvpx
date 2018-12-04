@@ -428,7 +428,9 @@ void vpx_js_decoder_open() {
 }
 
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_encoder_open(uint32_t fourcc, int width, int height, int fps) {
+void vpx_js_encoder_open(uint32_t fourcc, int width, int height,
+  int fps, int bitrate) {
+
   encoder = get_vpx_encoder_by_fourcc(fourcc);
   if (!encoder) die(("Invalid codec fourcc: 0x%x\n", fourcc));
   printf("Using %s\n", vpx_codec_iface_name(encoder->codec_interface()));
@@ -457,7 +459,7 @@ void vpx_js_encoder_open(uint32_t fourcc, int width, int height, int fps) {
   cfg.g_h = height;
   cfg.g_timebase.num = 1;
   cfg.g_timebase.den = fps;
-  cfg.rc_target_bitrate = 200; // kbit/s
+  cfg.rc_target_bitrate = bitrate; // kbit/s
   cfg.g_error_resilient = (vpx_codec_er_flags_t)0;
 
   int res = vpx_codec_enc_init(&ctx_enc, encoder->codec_interface(), &cfg, 0);
