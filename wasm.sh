@@ -15,6 +15,7 @@ emmake make
 emcc -v \
   -O3 --profiling --profiling-funcs -g4 \
   -s ALLOW_MEMORY_GROWTH=1 \
+  -s USE_PTHREADS=0 \
   libvpx.a -o libvpx.js
 
-ls -l --block-size K *.{wasm,js}
+ls -l --block-size K libvpx.* *.js

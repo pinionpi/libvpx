@@ -420,7 +420,12 @@ void vpx_js_decoder_open() {
 
   printf("Using %s\n", vpx_codec_iface_name(decoder->codec_interface()));
 
-  if (vpx_codec_dec_init(&ctx_dec, decoder->codec_interface(), NULL, 0))
+  vpx_codec_dec_cfg_t cfg = { 0 };
+
+  cfg.w = info->frame_width;
+  cfg.h = info->frame_height;
+
+  if (vpx_codec_dec_init(&ctx_dec, decoder->codec_interface(), &cfg, 0))
     die(("Failed to initialize decoder."));
 
   printf("Decoding %dx%d from %s to %s\n",
@@ -523,8 +528,10 @@ void vpx_js_encoder_run(int force_keyframe) {
   if (!infile) die(("Failed to open file for reading."));
 
   int flags = force_keyframe ? VPX_EFLAG_FORCE_KF : 0;
-  while (vpx_img_read(&writer->img, infile))
+  while (vpx_img_read(&writer->img, infile)) {
     encode_frame(&writer->img, writer->frame_count++, flags , writer);
+    // printf("Encoded a YUV frame: %dx%d.\n", writer->img.w, writer->img.h);
+  }
 
   // Flush encoder.
   // while (encode_frame(NULL, -1, 0, writer)) {}
