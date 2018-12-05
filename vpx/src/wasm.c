@@ -35,14 +35,11 @@
 #define VP9_FOURCC 0x30395056
 
 #define IVF_FRAME_HDR_SZ (4 + 8) /* 4 byte size + 8 byte timestamp */
-#define IVF_FILE_HDR_SZ 32
 
 const char* ENC_IVF_FILE = "/vpx-enc-ivf"; // vpx encoder writes here
 const char* ENC_YUV_FILE = "/vpx-enc-yuv"; // vpx encoder read here
 const char* DEC_IVF_FILE = "/vpx-dec-ivf"; // vpx decoder reads here
 const char* DEC_YUV_FILE = "/vpx-dec-yuv"; // vpx decoder writes here
-
-const char* kIVFSignature = "DKIF";
 
 typedef struct VpxInterface {
   const char *const name;
@@ -183,7 +180,7 @@ void vpx_img_write(const vpx_image_t *img, FILE *file) {
   }
 }
 
-// ivf reader
+// ivf reader + writer
 
 int ivf_read_frame(FILE *infile, uint8_t **buffer, size_t *bytes_read,
                    size_t *buffer_size) {
@@ -233,29 +230,6 @@ int ivf_read_frame(FILE *infile, uint8_t **buffer, size_t *bytes_read,
   return 1;
 }
 
-// ivf writer
-
-void ivf_write_file_header(FILE *outfile, const struct vpx_codec_enc_cfg *cfg,
-                           unsigned int fourcc, int frame_cnt) {
-  char header[32];
-
-  header[0] = 'D';
-  header[1] = 'K';
-  header[2] = 'I';
-  header[3] = 'F';
-  mem_put_le16(header + 4, 0);                     // version
-  mem_put_le16(header + 6, 32);                    // header size
-  mem_put_le32(header + 8, fourcc);                // fourcc
-  mem_put_le16(header + 12, cfg->g_w);             // width
-  mem_put_le16(header + 14, cfg->g_h);             // height
-  mem_put_le32(header + 16, cfg->g_timebase.den);  // rate
-  mem_put_le32(header + 20, cfg->g_timebase.num);  // scale
-  mem_put_le32(header + 24, frame_cnt);            // length
-  mem_put_le32(header + 28, 0);                    // unused
-
-  fwrite(header, 1, 32, outfile);
-}
-
 void ivf_write_frame_header(FILE *outfile, int64_t pts, size_t frame_size) {
   char header[12];
 
@@ -274,36 +248,14 @@ void ivf_write_frame_size(FILE *outfile, size_t frame_size) {
 
 // video reader: ivf -> vp8 -> yuv
 
-VpxVideoReader *vpx_video_reader_open(const char *filename) {
-  char header[32];
-  VpxVideoReader *reader = NULL;
-  FILE *const file = fopen(filename, "rb");
-  if (!file) return NULL;  // Can't open file
-
-  if (fread(header, 1, 32, file) != 32)
-    return NULL;  // Can't read file header
-
-  if (memcmp(kIVFSignature, header, 4) != 0)
-    return NULL;  // Wrong IVF signature
-
-  if (mem_get_le16(header + 4) != 0)
-    return NULL;  // Wrong IVF version
-
-  reader = calloc(1, sizeof(*reader));
-  if (!reader) return NULL;  // Can't allocate VpxVideoReader
-
-  reader->file = file;
-  reader->info.codec_fourcc = mem_get_le32(header + 8);
-  reader->info.frame_width = mem_get_le16(header + 12);
-  reader->info.frame_height = mem_get_le16(header + 14);
-  reader->info.time_base.numerator = mem_get_le32(header + 16);
-  reader->info.time_base.denominator = mem_get_le32(header + 20);
-
+VpxVideoReader *vpx_video_reader_open(const VpxVideoInfo *info) {
+  VpxVideoReader *reader = malloc(sizeof(*reader));
+  reader->file = NULL;
+  reader->info = *info;
   return reader;
 }
 
 void vpx_video_reader_close(VpxVideoReader *reader) {
-  fclose(reader->file);
   free(reader->buffer);
   free(reader);
 }
@@ -316,32 +268,13 @@ int vpx_video_reader_read_frame(VpxVideoReader *reader) {
 const uint8_t *vpx_video_reader_get_frame(VpxVideoReader *reader,
                                           size_t *size) {
   if (size) *size = reader->frame_size;
-
   return reader->buffer;
-}
-
-const VpxVideoInfo *vpx_video_reader_get_info(VpxVideoReader *reader) {
-  return &reader->info;
 }
 
 // video writer: yuv -> vp8 -> ivf
 
-void write_header(FILE *file, const VpxVideoInfo *info, int frame_count) {
-  struct vpx_codec_enc_cfg cfg;
-  cfg.g_w = info->frame_width;
-  cfg.g_h = info->frame_height;
-  cfg.g_timebase.num = info->time_base.numerator;
-  cfg.g_timebase.den = info->time_base.denominator;
-  ivf_write_file_header(file, &cfg, info->codec_fourcc, frame_count);
-}
-
-VpxVideoWriter *vpx_video_writer_open(const char *filename,
-                                      const VpxVideoInfo *info) {
-  FILE *const file = fopen(filename, "wb");
-  if (!file) return NULL;
-
+VpxVideoWriter *vpx_video_writer_open(const VpxVideoInfo *info) {
   VpxVideoWriter* writer = malloc(sizeof(*writer));
-  if (!writer) return NULL;
 
   if (!vpx_img_alloc(&writer->img, VPX_IMG_FMT_I420,
     info->frame_width, info->frame_height, 1))
@@ -350,9 +283,7 @@ VpxVideoWriter *vpx_video_writer_open(const char *filename,
   writer->keyframe_interval = 0;
   writer->frame_count = 0;
   writer->info = *info;
-  writer->file = file;
-
-  write_header(writer->file, info, 0);
+  writer->file = NULL;
   return writer;
 }
 
@@ -364,18 +295,8 @@ int vpx_video_writer_write_frame(VpxVideoWriter *writer, const uint8_t *buffer,
   return 1;
 }
 
-void vpx_video_writer_update_header(VpxVideoWriter *writer) {
-  // Rewriting frame header with real frame count
-  int pos = ftell(writer->file);
-  rewind(writer->file);
-  write_header(writer->file, &writer->info, writer->frame_count);
-  fseek(writer->file, pos, SEEK_SET); // restore the original position
-}
-
 void vpx_video_writer_close(VpxVideoWriter *writer) {
-  vpx_video_writer_update_header(writer);
   vpx_img_free(&writer->img);
-  fclose(writer->file);
   free(writer);
 }
 
@@ -410,32 +331,37 @@ int encode_frame(vpx_image_t *img, int frame_index, int flags,
 // JS API
 
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_decoder_open() {
-  reader = vpx_video_reader_open(DEC_IVF_FILE);
+void vpx_js_decoder_open(uint32_t fourcc, int width, int height, int fps) {
+  VpxVideoInfo info = { 0 };
+
+  info.codec_fourcc = fourcc;
+  info.frame_width = width;
+  info.frame_height = height;
+  info.time_base.numerator = 1;
+  info.time_base.denominator = fps;
+
+  reader = vpx_video_reader_open(&info);
   if (!reader) die(("Failed to open IVF file for reading."));
 
-  const VpxVideoInfo *info = vpx_video_reader_get_info(reader);
-  decoder = get_vpx_decoder_by_fourcc(info->codec_fourcc);
+  decoder = get_vpx_decoder_by_fourcc(reader->info.codec_fourcc);
   if (!decoder) die(("Unknown input codec."));
 
   printf("Using %s\n", vpx_codec_iface_name(decoder->codec_interface()));
 
   vpx_codec_dec_cfg_t cfg = { 0 };
 
-  cfg.w = info->frame_width;
-  cfg.h = info->frame_height;
+  cfg.w = width;
+  cfg.h = height;
 
   if (vpx_codec_dec_init(&ctx_dec, decoder->codec_interface(), &cfg, 0))
     die(("Failed to initialize decoder."));
 
   printf("Decoding %dx%d from %s to %s\n",
-    info->frame_width, info->frame_height, DEC_IVF_FILE, DEC_YUV_FILE);
+    width, height, DEC_IVF_FILE, DEC_YUV_FILE);
 }
 
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_encoder_open(uint32_t fourcc, int width, int height,
-  int fps, int bitrate) {
-
+void vpx_js_encoder_open(uint32_t fourcc, int width, int height, int fps, int bitrate) {
   encoder = get_vpx_encoder_by_fourcc(fourcc);
   if (!encoder) die(("Invalid codec fourcc: 0x%x\n", fourcc));
   printf("Using %s\n", vpx_codec_iface_name(encoder->codec_interface()));
@@ -450,7 +376,7 @@ void vpx_js_encoder_open(uint32_t fourcc, int width, int height,
   info.time_base.numerator = 1;
   info.time_base.denominator = fps;
 
-  writer = vpx_video_writer_open(ENC_IVF_FILE, &info);
+  writer = vpx_video_writer_open(&info);
   if (!writer) die(("Failed to create the video writer."));
 
   // init vpx encoder
@@ -491,13 +417,10 @@ void vpx_js_encoder_close() {
 EMSCRIPTEN_KEEPALIVE
 void vpx_js_decoder_run() {
   FILE* outfile = fopen(DEC_YUV_FILE, "wb");
-  if (!outfile) die(("Failed to open YUV file for writing."));
+  if (!outfile) die(("Failed to open file: %s\n", DEC_YUV_FILE));
 
-  int pos = ftell(reader->file);
-  // printf("Reopening the IVF file at pos %d\n", pos);
-  fclose(reader->file);
   reader->file = fopen(DEC_IVF_FILE, "rb");
-  fseek(reader->file, pos, SEEK_SET);
+  if (!reader->file) die(("Failed to open file: %s\n", DEC_IVF_FILE));
 
   while (vpx_video_reader_read_frame(reader)) {
     vpx_codec_iter_t iter = NULL;
@@ -519,13 +442,18 @@ void vpx_js_decoder_run() {
   }
 
   fclose(outfile);
+  fclose(reader->file);
   // fflush(stdout);
 }
 
+// The output delta frame (or key frame) size = bitrate / fps.
 EMSCRIPTEN_KEEPALIVE
 void vpx_js_encoder_run(int force_keyframe) {
   FILE *infile = fopen(ENC_YUV_FILE, "rb");
-  if (!infile) die(("Failed to open file for reading."));
+  if (!infile) die(("Failed to open file: %s\n", ENC_YUV_FILE));
+
+  writer->file = fopen(ENC_IVF_FILE, "wb");
+  if (!writer->file) die(("Failed to open file: %s\n", ENC_IVF_FILE));
 
   int flags = force_keyframe ? VPX_EFLAG_FORCE_KF : 0;
   while (vpx_img_read(&writer->img, infile)) {
@@ -536,8 +464,7 @@ void vpx_js_encoder_run(int force_keyframe) {
   // Flush encoder.
   // while (encode_frame(NULL, -1, 0, writer)) {}
 
-  vpx_video_writer_update_header(writer);
-  fflush(writer->file); // make IVF packets readable from /vpx-ivf
+  fclose(writer->file);
   fclose(infile);
 }
 
