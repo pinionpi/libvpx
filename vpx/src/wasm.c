@@ -14,7 +14,6 @@
 //  - Make sure the /vpx-ivf file contains IVF packets.
 //  - vpx_js_decoder_run();
 //  - vpx_js_decoder_close()
-//  - Read YUV frames from /vpx-yuv file.
 //
 // All the files are in-memory memfs emscripten files.
 
@@ -39,7 +38,6 @@
 const char* ENC_IVF_FILE = "/vpx-enc-ivf"; // vpx encoder writes here
 const char* ENC_YUV_FILE = "/vpx-enc-yuv"; // vpx encoder read here
 const char* DEC_IVF_FILE = "/vpx-dec-ivf"; // vpx decoder reads here
-const char* DEC_YUV_FILE = "/vpx-dec-yuv"; // vpx decoder writes here
 
 typedef struct VpxInterface {
   const char *const name;
@@ -160,24 +158,6 @@ int vpx_img_read(vpx_image_t *img, FILE *file) {
   }
 
   return 1;
-}
-
-void vpx_img_write(const vpx_image_t *img, FILE *file) {
-  int plane;
-
-  for (plane = 0; plane < 3; ++plane) {
-    const unsigned char *buf = img->planes[plane];
-    const int stride = img->stride[plane];
-    const int w = vpx_img_plane_width(img, plane) *
-                  ((img->fmt & VPX_IMG_FMT_HIGHBITDEPTH) ? 2 : 1);
-    const int h = vpx_img_plane_height(img, plane);
-    int y;
-
-    for (y = 0; y < h; ++y) {
-      fwrite(buf, 1, w, file);
-      buf += stride;
-    }
-  }
 }
 
 // ivf reader + writer
@@ -355,9 +335,6 @@ void vpx_js_decoder_open(uint32_t fourcc, int width, int height, int fps) {
 
   if (vpx_codec_dec_init(&ctx_dec, decoder->codec_interface(), &cfg, 0))
     die(("Failed to initialize decoder."));
-
-  printf("Decoding %dx%d from %s to %s\n",
-    width, height, DEC_IVF_FILE, DEC_YUV_FILE);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -414,13 +391,14 @@ void vpx_js_encoder_close() {
     printf("vpx_codec_destroy failed");
 }
 
+// rgba = malloc(width*height*4);
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_decoder_run() {
-  FILE* outfile = fopen(DEC_YUV_FILE, "wb");
-  if (!outfile) die(("Failed to open file: %s\n", DEC_YUV_FILE));
-
+void vpx_js_decoder_run(uint8_t *rgba) {
   reader->file = fopen(DEC_IVF_FILE, "rb");
   if (!reader->file) die(("Failed to open file: %s\n", DEC_IVF_FILE));
+
+  int width = reader->info.frame_width;
+  int height = reader->info.frame_height;
 
   while (vpx_video_reader_read_frame(reader)) {
     vpx_codec_iter_t iter = NULL;
@@ -436,14 +414,18 @@ void vpx_js_decoder_run() {
 
     while ((img = vpx_codec_get_frame(&ctx_dec, &iter)) != NULL) {
       // YUV frame can be 704x544 even if 640x480 is expected.
+      // TODO: Scale the YUV image to the frame size first.
       // printf("Decoded a YUV frame: %dx%d.\n", img->w, img->h);
-      vpx_img_write(img, outfile);
+      I420ToABGR(
+        img->planes[0], img->stride[0],
+        img->planes[1], img->stride[1],
+        img->planes[2], img->stride[2],
+        rgba, width * 4,
+        width, height);
     }
   }
 
-  fclose(outfile);
   fclose(reader->file);
-  // fflush(stdout);
 }
 
 // The output delta frame (or key frame) size = bitrate / fps.
