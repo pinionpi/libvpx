@@ -34,9 +34,6 @@
 
 #define IVF_FRAME_HDR_SZ (4 + 8) /* 4 byte size + 8 byte timestamp */
 
-const char* ENC_IVF_FILE = "/vpx-enc-ivf"; // vpx encoder writes here
-const char* DEC_IVF_FILE = "/vpx-dec-ivf"; // vpx decoder reads here
-
 typedef struct VpxInterface {
   const char *const name;
   const uint32_t fourcc;
@@ -57,7 +54,6 @@ typedef struct {
 
 typedef struct {
   VpxVideoInfo info;
-  FILE *file;
   uint8_t *buffer;
   size_t buffer_size;
   size_t frame_size;
@@ -65,11 +61,16 @@ typedef struct {
 
 typedef struct {
   VpxVideoInfo info;
-  FILE *file;
   vpx_image_t img;
   int frame_count;
   int keyframe_interval;
 } VpxVideoWriter;
+
+typedef struct {
+  uint8_t *data;
+  size_t pos;
+  size_t size;
+} MFILE;
 
 const VpxInterface vpx_encoders[] = {
   { "vp8", VP8_FOURCC, &vpx_codec_vp8_cx },
@@ -122,77 +123,64 @@ const VpxInterface* get_vpx_encoder_by_fourcc(uint32_t fourcc) {
   return NULL;
 }
 
-// ivf reader + writer
-
-int ivf_read_frame(FILE *infile, uint8_t **buffer, size_t *bytes_read,
-                   size_t *buffer_size) {
-  char raw_header[IVF_FRAME_HDR_SZ] = { 0 };
-  size_t frame_size = 0;
-
-  // printf("Reading IVF frame from file pos %d\n", (int)ftell(infile));
-  if (fread(raw_header, IVF_FRAME_HDR_SZ, 1, infile) != 1) {
-    if (!feof(infile))
-      printf("Failed to read frame size\n");
-    /* else
-      printf("Reached end of IVF file.\n"); */
-  } else {
-    frame_size = mem_get_le32(raw_header);
-    // printf("IVF frame size: %d\n", (int)frame_size);
-
-    if (frame_size > 256 * 1024 * 1024) {
-      printf("Read invalid frame size (%u)\n", (unsigned int)frame_size);
-      frame_size = 0;
-    }
-
-    if (frame_size > *buffer_size) {
-      uint8_t *new_buffer = realloc(*buffer, 2 * frame_size);
-
-      if (new_buffer) {
-        *buffer = new_buffer;
-        *buffer_size = 2 * frame_size;
-      } else {
-        printf("Failed to allocate compressed data buffer\n");
-        frame_size = 0;
-      }
-    }
-  }
-
-  if (!feof(infile)) {
-    // printf("Reading the frame data.\n");
-    if (fread(*buffer, 1, frame_size, infile) != frame_size) {
-      printf("Failed to read full frame\n");
-      return 1;
-    }
-
-    *bytes_read = frame_size;
-    return 0;
-  }
-
-  // printf("Failed to read the IVF frame.\n");
-  return 1;
+MFILE mfopen(uint8_t *data, int size) {
+  MFILE mfile = { 0 };
+  mfile.data = data;
+  mfile.size = size;
+  return mfile;
 }
 
-void ivf_write_frame_header(FILE *outfile, int64_t pts, size_t frame_size) {
-  char header[12];
+void mfwrite(const void *data, size_t size, MFILE *mfile) {
+  if (mfile->pos + size >= mfile->size)
+    die(("The output buffer is too small: %zu\n", mfile->size));
+  memcpy(&mfile->data[mfile->pos], data, size);
+  mfile->pos += size;
+}
 
+void mfread(void *data, size_t size, MFILE *mfile) {
+  if (mfile->pos + size >= mfile->size)
+    die(("The input buffer is too small: %zu\n", mfile->size));
+  memcpy(data, &mfile->data[mfile->pos], size);
+  mfile->pos += size;
+}
+
+// ivf reader + writer
+
+void ivf_read_frame(MFILE *infile, uint8_t **buffer, size_t *bytes_read,
+                   size_t *buffer_size) {
+  char raw_header[IVF_FRAME_HDR_SZ] = { 0 };
+  // printf("Reading IVF frame from file pos %d\n", (int)ftell(infile));
+  mfread(raw_header, IVF_FRAME_HDR_SZ, infile);
+  size_t frame_size = mem_get_le32(raw_header);
+  // printf("IVF frame size: %d\n", (int)frame_size);
+
+  if (frame_size > 256 * 1024 * 1024)
+    die(("Read invalid frame size: %zu\n", frame_size));
+
+  if (frame_size > *buffer_size) {
+    uint8_t *new_buffer = realloc(*buffer, 2 * frame_size);
+    if (!new_buffer) die(("Failed to allocate compressed data buffer\n"));
+    *buffer = new_buffer;
+    *buffer_size = 2 * frame_size;
+  }
+
+  // printf("Reading the frame data.\n");
+  mfread(*buffer, frame_size, infile);
+  *bytes_read = frame_size;
+}
+
+void ivf_write_frame_header(MFILE *output, int64_t pts, size_t frame_size) {
+  char header[12];
   mem_put_le32(header, (int)frame_size);
   mem_put_le32(header + 4, (int)(pts & 0xFFFFFFFF));
   mem_put_le32(header + 8, (int)(pts >> 32));
-  fwrite(header, 1, 12, outfile);
-}
-
-void ivf_write_frame_size(FILE *outfile, size_t frame_size) {
-  char header[4];
-
-  mem_put_le32(header, (int)frame_size);
-  fwrite(header, 1, 4, outfile);
+  mfwrite(header, 12, output);
 }
 
 // video reader: ivf -> vp8 -> yuv
 
 VpxVideoReader *vpx_video_reader_open(const VpxVideoInfo *info) {
   VpxVideoReader *reader = malloc(sizeof(*reader));
-  reader->file = NULL;
   reader->info = *info;
   return reader;
 }
@@ -202,8 +190,8 @@ void vpx_video_reader_close(VpxVideoReader *reader) {
   free(reader);
 }
 
-int vpx_video_reader_read_frame(VpxVideoReader *reader) {
-  return !ivf_read_frame(reader->file, &reader->buffer, &reader->frame_size,
+void vpx_video_reader_read_frame(VpxVideoReader *reader, MFILE *input) {
+  ivf_read_frame(input, &reader->buffer, &reader->frame_size,
                          &reader->buffer_size);
 }
 
@@ -225,14 +213,13 @@ VpxVideoWriter *vpx_video_writer_open(const VpxVideoInfo *info) {
   writer->keyframe_interval = 0;
   writer->frame_count = 0;
   writer->info = *info;
-  writer->file = NULL;
   return writer;
 }
 
-int vpx_video_writer_write_frame(VpxVideoWriter *writer, const uint8_t *buffer,
-                                 size_t size, int64_t pts) {
-  ivf_write_frame_header(writer->file, pts, size);
-  if (fwrite(buffer, 1, size, writer->file) != size) return 0;
+int vpx_video_writer_write_frame(VpxVideoWriter *writer, MFILE *output,
+  const uint8_t *buffer, size_t size, int64_t pts) {
+  ivf_write_frame_header(output, pts, size);
+  mfwrite(buffer, size, output);
   ++writer->frame_count;
   return 1;
 }
@@ -243,7 +230,7 @@ void vpx_video_writer_close(VpxVideoWriter *writer) {
 }
 
 int encode_frame(vpx_image_t *img, int frame_index, int flags,
-  VpxVideoWriter *writer) {
+  VpxVideoWriter *writer, MFILE *output) {
 
   int got_pkts = 0;
   vpx_codec_iter_t iter = NULL;
@@ -256,7 +243,7 @@ int encode_frame(vpx_image_t *img, int frame_index, int flags,
     got_pkts = 1;
 
     if (pkt->kind == VPX_CODEC_CX_FRAME_PKT) {
-      if (!vpx_video_writer_write_frame(writer, pkt->data.frame.buf,
+      if (!vpx_video_writer_write_frame(writer, output, pkt->data.frame.buf,
                                         pkt->data.frame.sz,
                                         pkt->data.frame.pts)) {
         die(("Failed to write compressed frame"));
@@ -352,62 +339,59 @@ void vpx_js_encoder_close() {
 
 // rgba = malloc(width*height*4);
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_decoder_run(uint8_t *rgba) {
-  reader->file = fopen(DEC_IVF_FILE, "rb");
-  if (!reader->file) die(("Failed to open file: %s\n", DEC_IVF_FILE));
+void vpx_js_decoder_run(uint8_t *rgba, uint8_t *ivfd, size_t ivfd_size) {
+  MFILE input = mfopen(ivfd, ivfd_size);
 
   int width = reader->info.frame_width;
   int height = reader->info.frame_height;
 
-  while (vpx_video_reader_read_frame(reader)) {
-    vpx_codec_iter_t iter = NULL;
-    vpx_image_t *img = NULL;
-    size_t frame_size = 0;
-    const uint8_t *frame = NULL;
+  vpx_video_reader_read_frame(reader, &input);
 
-    frame = vpx_video_reader_get_frame(reader, &frame_size);
-    // printf("Got an IVF frame: %d bytes\n", (int)frame_size);
+  vpx_codec_iter_t iter = NULL;
+  vpx_image_t *img = NULL;
+  size_t frame_size = 0;
+  const uint8_t *frame = NULL;
 
-    int res = vpx_codec_decode(&ctx_dec, frame, frame_size, NULL, 0);
-    if (res) die(("vpx_codec_decode failed: %d\n", (int)res));
+  frame = vpx_video_reader_get_frame(reader, &frame_size);
+  // printf("Got an IVF frame: %d bytes\n", (int)frame_size);
 
-    while ((img = vpx_codec_get_frame(&ctx_dec, &iter)) != NULL) {
-      // YUV frame can be 704x544 even if 640x480 is expected.
-      // TODO: Scale the YUV image to the frame size first.
-      // printf("Decoded a YUV frame: %dx%d.\n", img->w, img->h);
-      I420ToABGR(
-        img->planes[0], img->stride[0],
-        img->planes[1], img->stride[1],
-        img->planes[2], img->stride[2],
-        rgba, width * 4,
-        width, height);
-    }
-  }
+  int res = vpx_codec_decode(&ctx_dec, frame, frame_size, NULL, 0);
+  if (res) die(("vpx_codec_decode failed: %d\n", (int)res));
 
-  fclose(reader->file);
+  img = vpx_codec_get_frame(&ctx_dec, &iter);
+
+  // YUV frame can be 704x544 even if 640x480 is expected.
+  // TODO: Scale the YUV image to the frame size first.
+  // printf("Decoded a YUV frame: %dx%d.\n", img->w, img->h);
+  int err = I420ToABGR(
+    img->planes[0], img->stride[0],
+    img->planes[1], img->stride[1],
+    img->planes[2], img->stride[2],
+    rgba, width * 4,
+    width, height);
+
+  if (err) die(("I420ToABGR failed: %d\n", err));
 }
 
-// The output delta frame (or key frame) size = bitrate / fps.
+// ivfd: the output delta frame (or key frame) size = bitrate / fps.
 // rgba = malloc(width*height*4);
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_encoder_run(uint8_t *rgba) {
-  writer->file = fopen(ENC_IVF_FILE, "wb");
-  if (!writer->file) die(("Failed to open file: %s\n", ENC_IVF_FILE));
-
+size_t vpx_js_encoder_run(uint8_t *rgba, uint8_t *ivfd, size_t ivfd_size) {
+  MFILE output = mfopen(ivfd, ivfd_size);
   vpx_image_t *img = &writer->img;
 
   int width = writer->info.frame_width;
   int height = writer->info.frame_height;
 
-  ABGRToI420(
+  int res = ABGRToI420(
     rgba, width * 4,
     img->planes[0], img->stride[0],
     img->planes[1], img->stride[1],
     img->planes[2], img->stride[2],
     width, height);
 
-  encode_frame(img, writer->frame_count++, 0, writer);
-  // printf("Encoded a YUV frame: %dx%d.\n", writer->img.w, writer->img.h);
-  // while (encode_frame(NULL, -1, 0, writer)) {}
-  fclose(writer->file);
+  if (res) die(("ABGRToI420 failed: %d\n", res));
+  encode_frame(img, writer->frame_count++, 0, writer, &output);
+  // while (encode_frame(NULL, -1, 0, writer, &output)) {}
+  return output.pos + 1;
 }
