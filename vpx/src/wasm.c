@@ -2,7 +2,6 @@
 // The encoder lifetime:
 //
 //  - vpx_js_encoder_open()
-//  - Write frame pixels to /vpx-yuv file.
 //  - vpx_js_encoder_run();
 //  - vpx_js_encoder_close()
 //  - Read IVF packets from /vpx-ivf file.
@@ -36,7 +35,6 @@
 #define IVF_FRAME_HDR_SZ (4 + 8) /* 4 byte size + 8 byte timestamp */
 
 const char* ENC_IVF_FILE = "/vpx-enc-ivf"; // vpx encoder writes here
-const char* ENC_YUV_FILE = "/vpx-enc-yuv"; // vpx encoder read here
 const char* DEC_IVF_FILE = "/vpx-dec-ivf"; // vpx decoder reads here
 
 typedef struct VpxInterface {
@@ -122,42 +120,6 @@ const VpxInterface* get_vpx_encoder_by_fourcc(uint32_t fourcc) {
   }
 
   return NULL;
-}
-
-// img encoder
-
-int vpx_img_plane_width(const vpx_image_t *img, int plane) {
-  if (plane > 0 && img->x_chroma_shift > 0)
-    return (img->d_w + 1) >> img->x_chroma_shift;
-  else
-    return img->d_w;
-}
-
-int vpx_img_plane_height(const vpx_image_t *img, int plane) {
-  if (plane > 0 && img->y_chroma_shift > 0)
-    return (img->d_h + 1) >> img->y_chroma_shift;
-  else
-    return img->d_h;
-}
-
-int vpx_img_read(vpx_image_t *img, FILE *file) {
-  int plane;
-
-  for (plane = 0; plane < 3; ++plane) {
-    unsigned char *buf = img->planes[plane];
-    const int stride = img->stride[plane];
-    const int w = vpx_img_plane_width(img, plane) *
-                  ((img->fmt & VPX_IMG_FMT_HIGHBITDEPTH) ? 2 : 1);
-    const int h = vpx_img_plane_height(img, plane);
-    int y;
-
-    for (y = 0; y < h; ++y) {
-      if (fread(buf, 1, w, file) != (size_t)w) return 0;
-      buf += stride;
-    }
-  }
-
-  return 1;
 }
 
 // ivf reader + writer
@@ -372,9 +334,6 @@ void vpx_js_encoder_open(uint32_t fourcc, int width, int height, int fps, int bi
 
   int res = vpx_codec_enc_init(&ctx_enc, encoder->codec_interface(), &cfg, 0);
   if (res) die(("vpx_codec_enc_init failed: %d\n", (int)res))
-
-  printf("Encoding %dx%d from %s to %s\n",
-    width, height, ENC_YUV_FILE, ENC_IVF_FILE);
 }
 
 EMSCRIPTEN_KEEPALIVE
@@ -429,59 +388,26 @@ void vpx_js_decoder_run(uint8_t *rgba) {
 }
 
 // The output delta frame (or key frame) size = bitrate / fps.
+// rgba = malloc(width*height*4);
 EMSCRIPTEN_KEEPALIVE
-void vpx_js_encoder_run(int force_keyframe) {
-  FILE *infile = fopen(ENC_YUV_FILE, "rb");
-  if (!infile) die(("Failed to open file: %s\n", ENC_YUV_FILE));
-
+void vpx_js_encoder_run(uint8_t *rgba) {
   writer->file = fopen(ENC_IVF_FILE, "wb");
   if (!writer->file) die(("Failed to open file: %s\n", ENC_IVF_FILE));
 
-  int flags = force_keyframe ? VPX_EFLAG_FORCE_KF : 0;
-  while (vpx_img_read(&writer->img, infile)) {
-    encode_frame(&writer->img, writer->frame_count++, flags , writer);
-    // printf("Encoded a YUV frame: %dx%d.\n", writer->img.w, writer->img.h);
-  }
+  vpx_image_t *img = &writer->img;
 
-  // Flush encoder.
+  int width = writer->info.frame_width;
+  int height = writer->info.frame_height;
+
+  ABGRToI420(
+    rgba, width * 4,
+    img->planes[0], img->stride[0],
+    img->planes[1], img->stride[1],
+    img->planes[2], img->stride[2],
+    width, height);
+
+  encode_frame(img, writer->frame_count++, 0, writer);
+  // printf("Encoded a YUV frame: %dx%d.\n", writer->img.w, writer->img.h);
   // while (encode_frame(NULL, -1, 0, writer)) {}
-
   fclose(writer->file);
-  fclose(infile);
-}
-
-// yuv = malloc(width * height * 3/2);
-// rgba = malloc(width * height * 4);
-EMSCRIPTEN_KEEPALIVE
-int vpx_js_rgba_to_yuv420(
-  uint8_t* yuv, uint8_t* rgba, int width, int height) {
-  // Taken from WebRTC's ConvertRGB24ToI420:
-  uint8_t* yplane = yuv;
-  uint8_t* uplane = yplane + width * height;
-  uint8_t* vplane = uplane + width * height / 4;
-
-  return ABGRToI420(
-    rgba, width * 4,
-    yplane, width,
-    uplane, width / 2,
-    vplane, width / 2,
-    width, height);
-}
-
-// yuv = malloc(width * height * 3/2);
-// rgba = malloc(width * height * 4);
-EMSCRIPTEN_KEEPALIVE
-int vpx_js_yuv420_to_rgba(
-  uint8_t* rgba, uint8_t* yuv, int width, int height) {
-  // Taken from WebRTC's ConvertRGB24ToI420:
-  uint8_t* yplane = yuv;
-  uint8_t* uplane = yplane + width * height;
-  uint8_t* vplane = uplane + width * height / 4;
-
-  return I420ToABGR(
-    yplane, width,
-    uplane, width / 2,
-    vplane, width / 2,
-    rgba, width * 4,
-    width, height);
 }
