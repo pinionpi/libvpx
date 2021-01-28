@@ -34,6 +34,9 @@ endef
 CODEC_SRCS-yes += CHANGELOG
 CODEC_SRCS-yes += libs.mk
 
+include $(SRC_PATH_BARE)/third_party/libyuv/libyuv.mk
+CODEC_SRCS-yes += $(addprefix third_party/libyuv/,$(call enabled,LIBYUV_SRCS))
+
 include $(SRC_PATH_BARE)/vpx/vpx_codec.mk
 CODEC_SRCS-yes += $(addprefix vpx/,$(call enabled,API_SRCS))
 CODEC_DOC_SRCS += $(addprefix vpx/,$(call enabled,API_DOC_SRCS))
@@ -357,7 +360,6 @@ $(eval $(call libvpx_symlink_template,\
 INSTALL-LIBS-$(CONFIG_SHARED) += $(LIBVPX_SO_SYMLINKS)
 INSTALL-LIBS-$(CONFIG_SHARED) += $(LIBSUBDIR)/$(LIBVPX_SO)
 INSTALL-LIBS-$(CONFIG_SHARED) += $(if $(LIBVPX_SO_IMPLIB),$(LIBSUBDIR)/$(LIBVPX_SO_IMPLIB))
-
 
 LIBS-yes += vpx.pc
 vpx.pc: config.mk libs.mk

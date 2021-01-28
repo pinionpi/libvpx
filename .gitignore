@@ -1,3 +1,10 @@
+/libvpx.js
+/libvpx.wasm
+/libvpx.wast
+/libvpx.mem
+/libvpx.js.mem
+/libvpx.wasm.map
+/pthread-main.js
 *.S
 *.a
 *.asm.s
